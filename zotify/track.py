@@ -2,8 +2,11 @@ import time
 import uuid
 import ffmpy
 import shutil
+import requests
 from pathlib import Path, PurePath
 from librespot.metadata import TrackId
+
+from typing import Tuple, List, Any
 
 from zotify import __version__
 from zotify.config import Zotify
@@ -17,6 +20,65 @@ from zotify.utils import fill_output_template, set_audio_tags, set_music_thumbna
     get_archived_song_ids, add_to_song_archive, fmt_duration, wait_between_downloads, conv_artist_format, \
     conv_genre_format, compare_audio_tags, fix_filename
 
+from zotify.tokenmanager import SpotifyTokenManager, token_manager
+
+def get_song_info(song_id) -> Tuple[List[str], List[Any], str, str, Any, Any, Any, Any, Any, Any, int]:
+    """ Retrieves metadata for downloaded songs using own Spotify API credentials """
+
+    with Loader(PrintChannel.PROGRESS_INFO, "Fetching track information..."):
+        token = token_manager.get_token()
+
+        response = requests.get(
+            f"https://api.spotify.com/v1/tracks",
+            params={"ids": song_id, "market": "US"},
+            headers={
+                "Authorization": f"Bearer {token}"
+            }
+        )
+
+    if response.status_code == 429:
+        raise RuntimeError("Spotify API rate limit exceeded (your app)")
+
+    response.raise_for_status()
+    info = response.json()
+
+    if TRACKS not in info:
+        raise ValueError(f'Invalid response from TRACKS_URL:\n{info}')
+
+    try:
+        track = info[TRACKS][0]
+
+        artists = [a[NAME] for a in track[ARTISTS]]
+        album = track[ALBUM]
+
+        album_name = album[NAME]
+        name = track[NAME]
+        release_year = album[RELEASE_DATE].split('-')[0]
+        disc_number = track[DISC_NUMBER]
+        track_number = track[TRACK_NUMBER]
+        scraped_song_id = track[ID]
+        is_playable = track[IS_PLAYABLE]
+        duration_ms = track[DURATION_MS]
+
+        image = max(album[IMAGES], key=lambda i: i[WIDTH])
+        image_url = image[URL]
+
+        return (
+            artists,
+            track[ARTISTS],
+            album_name,
+            name,
+            image_url,
+            release_year,
+            disc_number,
+            track_number,
+            scraped_song_id,
+            is_playable,
+            duration_ms,
+        )
+
+    except Exception as e:
+        raise ValueError(f'Failed to parse TRACKS_URL response: {str(e)}\n{info}')
 
 def parse_track_metadata(track_resp: dict) -> dict[str, list[str] | str | int | bool]:
     track_metadata: dict[str, list[str] | str | int | bool] = {}
@@ -24,7 +86,8 @@ def parse_track_metadata(track_resp: dict) -> dict[str, list[str] | str | int | 
     # track_metadata unpack to individual variables
     # (scraped_track_id, track_name, artists, artist_ids, release_date, release_year, track_number, total_tracks,
     # album, album_artists, disc_number, compilation, duration_ms, image_url, is_playable) = track_metadata.values()
-    
+    print(track_metadata)
+
     track_metadata[ID] = track_resp[ID] # str
     track_metadata[NAME] = track_resp[NAME] # str
     track_metadata[ARTISTS] = [artist[NAME] for artist in track_resp[ARTISTS]] # list[str]
@@ -51,8 +114,20 @@ def parse_track_metadata(track_resp: dict) -> dict[str, list[str] | str | int | 
 def get_track_metadata(track_id) -> dict[str, list[str] | str | int | bool]:
     """ Retrieves metadata for downloaded songs """
     with Loader(PrintChannel.PROGRESS_INFO, "Fetching track information..."):
-        (raw, info) = Zotify.invoke_url(f'{TRACK_URL}?ids={track_id}&market=from_token')
+        token = token_manager.get_token()
+        response = requests.get(
+            f"https://api.spotify.com/v1/tracks",
+            params={"ids": track_id, "market": "US"},
+            headers={
+                "Authorization": f"Bearer {token}"
+            }
+        )
         
+        response.raise_for_status()
+        info = response.json()
+        
+        #(raw, info) = Zotify.invoke_url(f'{TRACK_URL}?ids={track_id}&market=from_token')
+        #print(info)
         if not TRACKS in info:
             raise ValueError(f'Invalid response from TRACK_URL:\n{raw}')
         
@@ -206,7 +281,8 @@ def download_track(mode: str, track_id: str, extra_keys: dict | None = None, pba
     
     try:
         track_metadata = get_track_metadata(track_id)
-        
+        print(track_metadata)
+
         with Loader(PrintChannel.PROGRESS_INFO, "Preparing download..."):
             track_name = track_metadata[NAME]
             total_discs = None

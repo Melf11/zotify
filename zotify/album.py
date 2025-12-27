@@ -3,21 +3,88 @@ from zotify.const import ALBUM_URL, ARTIST_URL, ITEMS, ARTISTS, NAME, ID, DISC_N
 from zotify.termoutput import Printer, PrintChannel, Loader
 from zotify.track import download_track
 from zotify.utils import fix_filename
+from zotify.track import get_track_metadata
+import requests
+from zotify.tokenmanager import SpotifyTokenManager, token_manager
+
+def get_album_info(album_id):
+
+    token = token_manager.get_token()
+    response = requests.get(
+        f"https://api.spotify.com/v1/albums",
+        params={"ids": album_id, "market": "US"},
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+    response.raise_for_status()
+    resp = response.json()
+
+    album_data = resp['albums'][0]
+
+    album_name = fix_filename(album_data['name'])
+    album_artists = [artist['name'] for artist in album_data['artists']]
+    compilation = album_data['album_type'] == 'compilation'
+
+    # Track-IDs abrufen
+    track_items = album_data['tracks']['items']
+    track_ids = [track['id'] for track in track_items]
+
+    # Metadaten für jeden Track abrufen
+    tracks = []
+    for tid in track_ids:
+        try:
+            track_meta = get_track_metadata(tid)
+            tracks.append(track_meta)
+        except Exception as e:
+            print(f"Failed to fetch track {tid}: {e}")
+
+    # Anzahl der Discs ermitteln
+    total_discs = max(track['disc_number'] for track in tracks) if tracks else 1
+
+    return album_name, album_artists, tracks, total_discs, compilation
 
 
-def get_album_info(album_id: str) -> tuple[str, str, list[dict], int, bool]:
+def get_album_info2(album_id: str) -> tuple[str, str, list[dict], int, bool]:
     """ Returns album info and tracklist"""
+    token = token_manager.get_token()
+    response = requests.get(
+        f"https://api.spotify.com/v1/albums",
+        params={"ids": album_id, "market": "US"},
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
     
-    (raw, resp) = Zotify.invoke_url(f'{ALBUM_URL}/{album_id}')
+    response.raise_for_status()
+    resp = response.json()
     
-    album_name = fix_filename(resp[NAME])
-    album_artists = [artist[NAME] for artist in resp[ARTISTS]]
-    compilation = resp[ALBUM_TYPE] == COMPILATION
+    print(resp)    
+    #(raw, resp) = Zotify.invoke_url(f'{ALBUM_URL}/{album_id}')
     
-    tracks = Zotify.invoke_url_nextable(f'{ALBUM_URL}/{album_id}/tracks', ITEMS)
+    #album_name = fix_filename(resp[NAME])
+    #album_artists = [artist[NAME] for artist in resp[ARTISTS]]
+    #compilation = resp[ALBUM_TYPE] == COMPILATION
     
-    total_discs = tracks[-1][DISC_NUMBER]
+    #tracks = Zotify.invoke_url_nextable(f'{ALBUM_URL}/{album_id}/tracks', ITEMS)
     
+    #total_discs = tracks[-1][DISC_NUMBER]
+    
+    #return album_name, album_artists, tracks, total_discs, compilation
+    
+    # Zugriff auf Albuminformationen aus der API-Antwort
+    album_data = resp['albums'][0]  # erstes Album im Response-Array
+
+    album_name = fix_filename(album_data['name'])
+    album_artists = [artist['name'] for artist in album_data['artists']]
+    compilation = album_data['album_type'] == 'compilation'
+
+    # Tracks abrufen
+    tracks = Zotify.invoke_url_nextable(f'{ALBUM_URL}/{album_id}/tracks', 'items')
+
+    # Anzahl der Discs ermitteln (falls mehrere Discs)
+    total_discs = tracks[-1]['disc_number'] if tracks else 1
+
     return album_name, album_artists, tracks, total_discs, compilation
 
 
